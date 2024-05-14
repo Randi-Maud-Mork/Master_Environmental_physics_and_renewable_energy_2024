@@ -1,0 +1,154 @@
+---
+title: "Statistical analysis"
+author: "Randi Maud Mork"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+### Loading packages
+
+```{r}
+library(fpc)
+library(dbscan)
+library(factoextra)
+library(dplyr)
+library(glmnet)
+library(tidyr)
+```
+
+# Observed data
+
+## Data preprocessing
+
+```{r}
+
+# standardizing
+Conv_ind_soundings_sd <- as.data.frame(scale(drop_na(Convective_indices_soundings[,-c(1,5)])))%>%
+  mutate(conv = factor(Convective_indices_soundings_classified$conv, levels = c(0,1)))
+summary(Conv_ind_soundings_sd)
+
+# log-transforming
+Conv_ind_soundings_log <- Convective_indices_soundings%>%
+  mutate(CTP_log = log(CTP), HI_low_log = log(HI_low), 
+         SM_Morning_log = log(SM_Morning), BR_Morning_log = log(BR_Morning),
+         conv = Convective_indices_soundings_classified$conv)
+summary(Conv_ind_soundings_log)
+
+```
+
+## Clustering, DBSCAN
+
+```{r}
+dbscan::kNNdistplot(Conv_ind_soundings_sd[,-c(3,8)], k =  3)
+abline(h = 1.5, lty = 2)
+cluster.mod <- fpc::dbscan(Conv_ind_soundings_sd[, -c(3,8)] , eps = 1.5, MinPts = 3, scale = , method = "raw")
+
+fviz_cluster(cluster.mod, Conv_ind_soundings_sd[,-c(3,8)], stand = F, ellipse = T,geom = "point", choose.vars = c("CTP", "HI_low"))
+plot(cluster.mod, Conv_ind_soundings_sd[, -5], main = "DBSCAN")
+
+
+CTP_HI_low_clustered <- cbind(Convective_indices_soundings_classified,cluster.mod$cluster)%>%
+  mutate(cluster=factor(`cluster.mod$cluster`))
+```
+
+## Generalised linear model
+
+```{r}
+# Standardized data
+glm.obj <- glm(conv ~ ., data = Conv_ind_soundings_sd, family = "binomial")
+plot(glm.obj, which = c(1,2), caption = c("Resid vs fit,FUll dataset, standardized", "QQ-plot,Full dataset sd"))
+summary(glm.obj)
+
+# reduced variables
+glm.red.obj <- glm(conv ~ CTP+HI_low+SM_Morning, data = Conv_ind_soundings_sd, family = "binomial")
+plot(glm.red.obj, which = c(1,2), caption = c("Resid vs fit,reduced dataset, standardized", "QQ-plot, reduced dataset sd"))
+summary(glm.red.obj)
+Conv_prob <- predict(glm.red.obj, newdata = Conv_ind_soundings_sd, type = "response")
+Conv_prob
+
+
+## log transform to see for better fit of residual and QQ - plots
+glm.log.obj <- glm(conv ~ CTP_log+HI_low_log+SM_Morning_log, data = Conv_ind_soundings_log, family = "binomial")
+plot(glm.log.obj, which = c(1,2), caption = c("Resid vs fit, reduced dataset, log", "QQ-plot, reduced dataset, log"))
+summary(glm.log.obj)
+
+
+```
+In the analysis of the observed data the model with the standardised dataset fits the data best and this model is chosen for further analysis.
+
+
+# Reanalysis 
+
+## Data preprocessing
+
+```{r}
+#standardization and variable selection
+CTP_HI_low_reanalysis_model <- as.data.frame(scale(Reanalysis_classified[,c(2,3,4,7,8,9)])) %>%
+  mutate(Precip_type = Reanalysis_classified$Precip_type, Convection = Reanalysis_classified$Convection)
+
+# log-transformation
+CTP_HI_low_reanalysis_model_log <- as.data.frame(log(Reanalysis_classified[,c(2,3,4,7,8,9)])) %>%
+  mutate(Precip_type = Reanalysis_classified$Precip_type, Convection = Reanalysis_classified$Convection)%>%drop_na()
+summary(CTP_HI_low_reanalysis_model_log)
+
+
+```
+
+## Clustering DBSCAN
+
+```{r}
+dbscan::kNNdistplot(CTP_HI_low_reanalysis_model[,c(1,2,3,4)], k =  3)
+abline(h = 0.9, lty = 2)
+cluster.mod <- fpc::dbscan(CTP_HI_low_reanalysis_model[,c(1,2,3,4)],eps = 0.9, MinPts = 2)
+
+fviz_cluster(cluster.mod, CTP_HI_low_reanalysis_model, stand = F, ellipse = T,geom = "point", choose.vars = c("CTP", "HI_low"))
+plot(cluster.mod, CTP_HI_low_reanalysis_model[,c(1,2,3,4)], main = "DBSCAN")
+
+CTP_HI_low_reanalysis_clustered <- cbind(Reanalysis_classified,cluster.mod$cluster)%>%
+  mutate(cluster=factor(`cluster.mod$cluster`))
+```
+
+
+## Generalised linear model
+
+```{r}
+# Standardized values 
+glm_Reanalysis <- glm(Convection ~ ., data = CTP_HI_low_reanalysis_model[,c(1,2,3,8)], family = "binomial")
+
+summary(glm_Reanalysis)
+plot(glm_Reanalysis, which = c(1,2))
+
+ # log-transformed values 
+glm_re_log <- glm(Convection ~ ., data = CTP_HI_low_reanalysis_model_log[,c(1,2,3,8)], family = "binomial")
+
+summary(glm_re_log)
+plot(glm_re_log, which = c(1,2))
+Conv_prob <- predict(glm_re_log, newdata = CTP_HI_low_reanalysis_model_log[,c(1,2,3,8)], type = "response")
+
+Conv_prob
+```
+
+
+In reanalysis data the log transformed data shows a model better fit to the data. The model with log-transformed data is therefore chosen. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

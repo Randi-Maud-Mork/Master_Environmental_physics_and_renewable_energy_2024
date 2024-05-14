@@ -1,0 +1,717 @@
+---
+title: "Calculation and analysis of observed data"
+author: "Randi Maud Mork"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F)
+```
+
+# Loading packages
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(data.table)
+library(tidyr)
+library(itertools)
+```
+
+## Creating function for calculation of Convective triggering potential
+```{r}
+# integral between the moist adiabatic lapse rate and the actual temperature 
+# between 100hPa and 300hPa above ground level
+
+calculate_integral_trapezian_rule <- function(vec, air_pressure){
+  areas <- c()
+  for (n in c(2:length(vec))){
+    area <- ((air_pressure[n-1] - air_pressure[n])/2)*(vec[n]+vec[n-1])
+    areas <- append(areas, area)
+    
+  }
+  int <- sum(areas)
+  
+  return(int)
+}
+
+# Defining a fumction to calculate CTP
+calculate_CTP<- function(air_temperature, altitude, MALR, air_pressure){
+  MALR_temp = air_temperature[1] + (MALR/1000) * (altitude - altitude[1])
+  MALR_int <- calculate_integral_trapezian_rule(MALR_temp, air_pressure)
+  air_temperature_int <- calculate_integral_trapezian_rule(air_temperature, air_pressure)
+  CTP <- MALR_int-air_temperature_int
+  # CTP <- sum(MALR-air_temperature)
+  
+  return(CTP)
+}
+```
+### Creating Functions for MALR 
+
+```{r}
+######################
+# Script to calculate moist adiabatic lapse rate (MALR)
+
+
+# Pre-calculations needed to calculated MALR
+# 1. Calculate saturation vapor pressure
+# 2. Calculate saturation mixing ratio
+# 3. Calculate dry adiabatic lapse rate
+# 4. Calculate moist adiabatic lapse rate
+
+
+# Function to calculate Saturation Vapor Pressure (e_s)
+calculate_saturation_vapor_pressure <- function(temperature) {
+  # Constants
+  L_v <- 2.5e6  # Latent heat of vaporization (J/kg)
+  R_v <- 461    # Gas constant for water vapor (J/(kg*K))
+  
+  # Calculate saturation vapor pressure
+  e_s <- 611 * exp((L_v / (R_v * temperature)) * (1 / 273.15 - 1 / temperature))
+  
+  return(e_s)
+}
+
+##################
+# Function to calculate Saturation Mixing Ratio (w_s)
+calculate_saturation_mixing_ratio <- function(temperature, pressure) {
+  # Constants
+  R_d <- 287    # Gas constant for dry air (J/(kg*K))
+  
+  # Calculate saturation vapor pressure
+  e_s <- calculate_saturation_vapor_pressure(temperature)
+  
+  # Calculate saturation mixing ratio
+  w_s <- 0.622 * e_s / (pressure - e_s)
+  
+  return(w_s)
+}
+
+
+# Function to calculate dry adiabatic lapse rate
+calculate_dry_adiabatic_lapse_rate <- function(temperature, pressure) {
+  # Constants
+  R_d <- 287  # Gas constant for dry air (J/(kg*K))
+  
+  # Calculate dry adiabatic lapse rate
+  gamma_d <- -R_d / (temperature)
+  
+  return(gamma_d)
+}
+
+######
+# Function to calculate the moist adiabatic lapse rate
+calculate_moist_adiabatic_lapse_rate <- function(temperature, pressure, w_s) {
+  # Constants
+  L_v <- 2.5e6  # Latent heat of vaporization (J/kg)
+  c_p <- 1005   # Specific heat of dry air (J/(kg*K))
+  R_d <- 287    # Gas constant for dry air (J/(kg*K))
+  R_v <- 461    # Gas constant for water vapor (J/(kg*K))
+  
+  # Calculate moist adiabatic lapse rate
+  gamma_d <- calculate_dry_adiabatic_lapse_rate(temperature, pressure)
+  gamma_s <- gamma_d * ((1 + w_s * L_v / (R_d * temperature)) / (1 + w_s * L_v^2 / (c_p * R_v * temperature^2)))
+  
+  return(gamma_s)
+}
+```
+
+### Creating split datasets and adding Malr for each 
+
+```{r}
+# Create split datasets
+
+split_dataset_by_dateTime <- function() {
+  ans <- DT[, list(list(.SD)), by=dateTime]$V1
+  setattr(ans,'names', unique(DT$dateTime)) 
+}
+
+### 2021 ### 
+
+sounding_21_data <- read.csv('sounding_21')
+DT <- as.data.table(sounding_21_data)
+split_data_21 <- split_dataset_by_dateTime()
+
+data_with_MALR <- list()
+for (n in split_data_21) {
+  #new day
+  temperature <- n$air_temperature
+  pressure <- n$air_pressure
+  
+  temperature_profile <- n$air_temperature
+  pressure_levels <- n$air_pressure
+  
+  # Calculate saturation mixing ratio using the function
+  w_s <- saturation_mixing_ratio <- calculate_saturation_mixing_ratio(temperature_profile, pressure_levels)
+  # Calculate MALR
+  MALR <- calculate_moist_adiabatic_lapse_rate(temperature,pressure,w_s)
+  
+  new_rows<- cbind(n,MALR)
+  data_with_MALR <- rbind(data_with_MALR,new_rows)
+  
+}
+
+Data_21_with_MALR <- cbind(DT$dateTime, data_with_MALR)
+DT <- as.data.table(Data_21_with_MALR)
+names(DT)[names(DT) == 'V1'] <- 'dateTime'
+Data_21_with_MALR <- split_dataset_by_dateTime()
+
+### 2022 ### 
+
+sounding_22_data <- read.csv('sounding_22')
+DT <- as.data.table(sounding_22_data)
+split_data_22 <- split_dataset_by_dateTime()
+
+data_22_with_MALR <- list()
+for (n in split_data_22) {
+  #new day
+  temperature <- n$air_temperature
+  pressure <- n$air_pressure
+  
+  temperature_profile <- n$air_temperature
+  pressure_levels <- n$air_pressure
+  
+  # Calculate saturation mixing ratio using the function
+  w_s <- saturation_mixing_ratio <- calculate_saturation_mixing_ratio(temperature_profile, pressure_levels)
+  # Calculate MALR
+  MALR <- calculate_moist_adiabatic_lapse_rate(temperature,pressure,w_s)
+  
+  new_rows<- cbind(n,MALR)
+  data_22_with_MALR <- rbind(data_22_with_MALR,new_rows)
+  
+}
+
+Data_22_with_MALR <- cbind(DT$dateTime, data_22_with_MALR)
+DT <- as.data.table(Data_22_with_MALR)
+names(DT)[names(DT) == 'V1'] <- 'dateTime'
+Data_22_with_MALR <- split_dataset_by_dateTime()
+
+### 2023 ### 
+
+sounding_23_data <- read.csv('sounding_23')
+DT <- as.data.table(sounding_23_data)
+split_data_23 <- split_dataset_by_dateTime()
+
+data_with_MALR <- list()
+for (n in split_data_23) {
+  #new day
+  temperature <- n$air_temperature
+  pressure <- n$air_pressure
+  
+  temperature_profile <- n$air_temperature
+  pressure_levels <- n$air_pressure
+  
+  # Calculate saturation mixing ratio using the function
+  w_s <- saturation_mixing_ratio <- calculate_saturation_mixing_ratio(temperature_profile, pressure_levels)
+  # Calculate MALR
+  MALR <- calculate_moist_adiabatic_lapse_rate(temperature,pressure,w_s)
+
+  new_rows<- cbind(n,MALR)
+  data_with_MALR <- rbind(data_with_MALR,new_rows)
+  
+}
+
+Data_23_with_MALR <- cbind(DT$dateTime, data_with_MALR)
+DT <- as.data.table(Data_23_with_MALR)
+names(DT)[names(DT) == 'V1'] <- 'dateTime'
+Data_23_with_MALR <- split_dataset_by_dateTime()
+```
+
+### Implementing CTP in a for loop for all three years
+
+```{r}
+### 2021 ###
+CTP_21_list2 <- c()
+
+for(list in Data_21_with_MALR){
+  critical_region <- list%>%
+    filter(air_pressure <= 900, air_pressure >= 700)%>%
+    mutate(MALR_crit = air_temperature[1] + (MALR/1000) * (altitude - altitude[1]))
+  CTP <- calculate_CTP(critical_region$air_temperature, critical_region$altitude, critical_region$MALR, critical_region$air_pressure)
+  CTP_21_list2 <- append(CTP_21_list2, CTP)
+  
+}
+dates_21 <- ymd_hms(names(Data_21_with_MALR))
+CTP_21 <- data.frame(Dates = dates_21,
+                     CTP = CTP_21_list2)
+
+### 2022 ###
+CTP_22_list2 <- c()
+
+for(list in Data_22_with_MALR){
+  critical_region <- list%>%
+    filter(air_pressure< 900, air_pressure>700)%>%
+    mutate(MALR_crit = air_temperature[1] + (MALR/1000) * (altitude - altitude[1]))
+  CTP <- calculate_CTP(critical_region$air_temperature, critical_region$altitude,critical_region$MALR, critical_region$air_pressure)
+  CTP_22_list2 <- append(CTP_22_list2, CTP)
+  
+}
+dates_22 <- ymd_hms(names(Data_22_with_MALR))
+CTP_22 <- data.frame(Dates = dates_22,
+                     CTP = CTP_22_list2)
+### 2023 ###
+CTP_23_list2 <- c()
+
+for(list in Data_23_with_MALR){
+  critical_region <- list%>%
+    filter(air_pressure< 900, air_pressure>700)%>%
+    mutate(MALR_crit = air_temperature[1] + (MALR/1000) * (altitude - altitude[1]))
+  CTP <- calculate_CTP(critical_region$air_temperature, critical_region$altitude,critical_region$MALR, critical_region$air_pressure)
+  CTP_23_list2 <- append(CTP_23_list2, CTP)
+  
+}
+
+dates_23 <- ymd_hms(names(Data_23_with_MALR))
+CTP_23 <- data.frame(Dates = dates_23,
+                    CTP = CTP_23_list2)
+```
+
+### Calculating HI_low
+
+```{r}
+# Extracting data at correct pressure levels
+
+data_950 <- data.frame()
+data_850 <- data.frame()
+
+for (list in Data_21_with_MALR){
+  row_950 <- list[which.min(abs(950-list$air_pressure))]
+  data_950 <- rbind(data_950, row_950)
+  row_850 <- list[which.min(abs(850-list$air_pressure))]
+  data_850 <- rbind(data_850, row_850)
+}
+
+data_950_dd <- data_950%>%
+  mutate(dew_point_depression950 = air_temperature - dew_point_temperature, dateTime = ymd_hms(names(Data_21_with_MALR)))
+data_850_dd <- data_850%>%
+  mutate(dew_point_depression850 = air_temperature - dew_point_temperature, dateTime = ymd_hms(names(Data_21_with_MALR)))
+
+
+HI_low_21 <-data.frame(dateTime = ymd_hms(names(Data_21_with_MALR)) , HI_low =  data_850_dd$dew_point_depression850 + data_950_dd$dew_point_depression950)
+
+## 2022 ##
+
+data_950 <- data.frame()
+data_850 <- data.frame()
+
+for (list in Data_22_with_MALR){
+  row_950 <- list[which.min(abs(950-list$air_pressure))]
+  data_950 <- rbind(data_950, row_950)
+  row_850 <- list[which.min(abs(850-list$air_pressure))]
+  data_850 <- rbind(data_850, row_850)
+}
+
+data_950_dd <- data_950%>%
+  mutate(dew_point_depression950 = air_temperature - dew_point_temperature, dateTime = ymd_hms(names(Data_22_with_MALR)))
+data_850_dd <- data_850%>%
+  mutate(dew_point_depression850 = air_temperature - dew_point_temperature, dateTime = ymd_hms(names(Data_22_with_MALR)))
+
+
+HI_low_22 <-data.frame(dateTime = ymd_hms(names(Data_22_with_MALR)) , HI_low =  data_850_dd$dew_point_depression850 + data_950_dd$dew_point_depression950)
+
+## 2023 ##
+
+data_950 <- data.frame()
+data_850 <- data.frame()
+
+for (list in Data_23_with_MALR){
+  row_950 <- list[which.min(abs(950-list$air_pressure))]
+  data_950 <- rbind(data_950, row_950)
+  row_850 <- list[which.min(abs(850-list$air_pressure))]
+  data_850 <- rbind(data_850, row_850)
+}
+
+data_950_dd <- data_950%>%
+  mutate(dew_point_depression950 = air_temperature - dew_point_temperature, 
+         dateTime = ymd_hms(names(Data_23_with_MALR)))
+data_850_dd <- data_850%>%
+  mutate(dew_point_depression850 = air_temperature - dew_point_temperature, 
+         dateTime = ymd_hms(names(Data_23_with_MALR)))
+
+
+HI_low_23 <-data.frame(dateTime = ymd_hms(names(Data_23_with_MALR)) , HI_low =  data_850_dd$dew_point_depression850 + data_950_dd$dew_point_depression950)
+
+```
+
+# Plotting the results
+```{r}
+# creating data frames with both HI_low and CTP for each sounding
+CTP_HI_low_21 <- data.frame(DateTime = CTP_21$Dates,
+                            CTP = CTP_21$CTP,
+                            HI_low = HI_low_21$HI_low)
+CTP_HI_low_22 <- data.frame(DateTime = CTP_22$Dates,
+                            CTP = CTP_22$CTP,
+                            HI_low = HI_low_22$HI_low)
+CTP_HI_low_23 <- data.frame(DateTime = CTP_23$Dates,
+                            CTP = CTP_23$CTP,
+                            HI_low = HI_low_23$HI_low)
+
+CTP_HI_low_tot <- rbind(CTP_HI_low_21,CTP_HI_low_22,CTP_HI_low_23)
+
+
+# plotting CTP vs HI_low
+
+CTP_HI_low_tot.fig <- ggplot(data = CTP_HI_low_tot, aes(x=CTP, y = HI_low))+
+  geom_point()+
+  geom_hline(aes(yintercept= 15), color='red', alpha =0.7)+
+  geom_hline(aes(yintercept= 5), color= 'blue',alpha = 0.7)+
+  geom_vline(aes(xintercept = 0), color = 'black', alpha = 0.7)+
+  geom_vline(aes(xintercept = 250), color = 'black', alpha = 0.7)+
+  scale_y_continuous(limits = c(0,45), n.breaks = 9)+
+  scale_x_continuous(limits = c(0,2000), n.breaks = 9)+
+  theme(legend.text = element_text(size= 14),
+        legend.title = element_text(size=16),
+        axis.title = element_text(size = 16),
+        axis.text = element_text(size =14),
+        plot.title = element_text(size = 18))+
+  labs(title = 'CTP vs HI_low 2021-2023')+
+  xlab("CTP [J/kg]")+ ylab("HI_low [K]")
+
+CTP_HI_low_tot.fig
+
+ctp_density.fig <- ggplot(CTP_HI_low_tot, aes(x = CTP)) + 
+  geom_histogram(aes(y = ..density..),
+                 colour = 1, fill = "white") +
+  geom_density(colour = "#0072B2", lwd = 1.2)+
+  labs(x= "CTP [J/kg]")
+hi_low_density.fig <- ggplot(CTP_HI_low_tot, aes(x = HI_low)) + 
+  geom_histogram(aes(y = ..density..),
+                 colour = 1, fill = "white") +
+  geom_density(colour = "#0072B2", lwd = 1.2)+
+  labs(x= expression(paste(HI[low]," [K]")))
+```
+
+
+## Classifying convective days with CAPE and CIN
+
+Limits for CAPE and CIN are set to 300 J/kg for CAPE and 100J/kg for CIN. 
+
+### CAPE and CIN from reanalysis data
+
+```{r}
+# Filter out so that we have only one sounding per day, and only morning/ day soundings.
+CTP_HI_low_tot_daily <- CTP_HI_low_tot[-c(2,25,31,32,35,36,55,56,58,59,60,61,63,65),]
+
+# Load Reanalysis data from saved csvs
+Reanalysis_21_indices <- read.csv('Reanalysis_data/reanalysis_21_indices.csv')
+Reanalysis_22_indices <- read.csv('Reanalysis_data/reanalysis_22_indices.csv')
+Reanalysis_23_indices <- read.csv('Reanalysis_data/reanalysis_23_indices.csv')
+
+Reanalysis_indices_combined <- rbind(Reanalysis_21_indices, Reanalysis_22_indices, Reanalysis_23_indices)
+# Filter so that only the sounding dates values are left
+Reanalysis_indices_filtered <- filter(Reanalysis_indices_combined, date(DateTime) %in% date(CTP_HI_low_tot_daily$DateTime))
+
+# Only include the highest CAPE and CIN values from each day
+Reanalysis_indices_filtered <- Reanalysis_indices_filtered%>%
+  group_by(date(DateTime))%>%
+  mutate(DateTime = date(DateTime), CAPE = max(CAPE), CIN = max(CIN))%>%
+  distinct(DateTime, .keep_all = T)
+
+
+Convective_indices_soundings <- data.frame(Date = CTP_HI_low_tot_daily$DateTime,
+                                           CTP = CTP_HI_low_tot_daily$CTP,
+                                           HI_low = CTP_HI_low_tot_daily$HI_low,
+                                           CAPE = Reanalysis_indices_filtered$CAPE,
+                                           CIN = Reanalysis_indices_filtered$CIN)
+
+summary(Convective_indices_soundings)
+```
+
+
+### Incorporating field station variables 
+Containing soil moisture, eddy covariance, and precipitation information.
+
+```{r}
+Combined_df_21 <- read.csv("Combined_df_21.csv")
+Combined_df_22 <- read.csv("Combined_df_22.csv")
+Combined_df_23 <- read.csv("Combined_df_23.csv")
+
+## SMIoT, GroPoint
+
+SM_Morning_SMIoT_21 <- Combined_df_21%>%
+  filter(hour(DateTime)<12)%>%
+  group_by(date(DateTime))%>%
+  summarise(SM_morning = mean(SW05_perc_1))
+colnames(SM_Morning_SMIoT_21) <- c('DateTime', 'SM_morning_SMIoT')
+
+SM_Morning_SMIoT_22 <- Combined_df_22%>%
+  filter(hour(DateTime)<12)%>%
+  group_by(date(DateTime))%>%
+  summarise(SM_morning = mean(SW05_perc_1))
+colnames(SM_Morning_SMIoT_22) <- c('DateTime', 'SM_morning_SMIoT')
+
+SM_Morning_SMIoT_23 <- Combined_df_23%>%
+  filter(hour(DateTime)<12)%>%
+  group_by(date(DateTime))%>%
+  summarise(SM_morning = mean(SW05_perc_1))
+colnames(SM_Morning_SMIoT_23) <- c('DateTime', 'SM_morning_SMIoT')
+
+SMIoT_Morning_tot <- rbind(SM_Morning_SMIoT_21, SM_Morning_SMIoT_22, SM_Morning_SMIoT_23)
+SMIot_Morning_sounding_dates <- filter(SMIoT_Morning_tot,date(DateTime) %in% date(CTP_HI_low_tot_daily$DateTime))
+
+
+#SoilVUE
+SM_Morning_21 <- Combined_df_21%>%
+  filter(hour(DateTime)<12)%>%
+  group_by(date(DateTime))%>%
+  summarise(SM_morning = mean(Soil_moisture))
+colnames(SM_Morning_21) <- c('DateTime', 'SM_morning')
+
+SM_Morning_22 <- Combined_df_22%>%
+  filter(hour(DateTime)<12)%>%
+  group_by(date(DateTime))%>%
+  summarise(SM_morning = mean(Soil_moisture))
+colnames(SM_Morning_22) <- c('DateTime', 'SM_morning')
+
+SM_Morning_23 <- Combined_df_23%>%
+  filter(hour(DateTime)<12)%>%
+  group_by(date(DateTime))%>%
+  summarise(SM_morning = mean(Soil_moisture))
+colnames(SM_Morning_23) <- c('DateTime', 'SM_morning')
+
+SM_Morning_tot <- rbind(SM_Morning_21, SM_Morning_22, SM_Morning_23)
+SM_Morning_sounding_dates <- filter(SM_Morning_tot,date(DateTime) %in% date(CTP_HI_low_tot_daily$DateTime))
+
+# 2. NB_Evening
+
+NB_Evening_21 <- Combined_df_21%>%
+  filter(hour(ymd_hms(DateTime))>=14)%>%
+  group_by(date(DateTime))%>%
+  summarise(NB_Evening = sum(Precipitation))
+colnames(NB_Evening_21) <- c('DateTime', 'NB_Evening')
+
+NB_Evening_22 <- Combined_df_22%>%
+  filter(hour(ymd_hms(DateTime))>=14)%>%
+  group_by(date(DateTime))%>%
+  summarise(NB_Evening = sum(Precipitation))
+colnames(NB_Evening_22) <- c('DateTime', 'NB_Evening')
+
+NB_Evening_23 <- Combined_df_23%>%
+  filter(hour(ymd_hms(DateTime))>=14)%>%
+  group_by(date(DateTime))%>%
+  summarise(NB_Evening = sum(Precipitation))
+colnames(NB_Evening_23) <- c('DateTime', 'NB_Evening')
+
+NB_Evening_tot <- rbind(NB_Evening_21, NB_Evening_22, NB_Evening_23)
+NB_sounding_dates <- filter(NB_Evening_tot,date(DateTime) %in% date(CTP_HI_low_tot_daily$DateTime))
+
+# 3. NB_Morning
+
+NB_Morning_21 <- Combined_df_21%>%
+  filter(hour(DateTime)<12)%>%
+  group_by(date(DateTime))%>%
+  summarise(NB_Morning = sum(Precipitation))
+colnames(NB_Morning_21) <- c('DateTime', 'NB_Morning')
+
+NB_Morning_22 <- Combined_df_22%>%
+  filter(hour(DateTime)<12)%>%
+  group_by(date(DateTime))%>%
+  summarise(NB_Morning = sum(Precipitation))
+colnames(NB_Morning_22) <- c('DateTime', 'NB_Morning')
+
+NB_Morning_23 <- Combined_df_23%>%
+  filter(hour(DateTime)<12)%>%
+  group_by(date(DateTime))%>%
+  summarise(NB_Morning = sum(Precipitation))
+colnames(NB_Morning_23) <- c('DateTime', 'NB_Morning')
+
+NB_Morning_tot <- rbind(NB_Morning_21, NB_Morning_22, NB_Morning_23)
+NB_M_sounding_dates <- filter(NB_Morning_tot,date(DateTime) %in% date(CTP_HI_low_tot_daily$DateTime))
+
+
+# 4. BR_Morning, Mean bowen ratio of hours from 0600-1200, sunrise at 0600 at its darkest
+
+BR_Morning_21 <- Combined_df_21 %>%
+  filter(hour(ymd_hms(DateTime))>06, hour(ymd_hms(DateTime))<12)%>%
+  group_by(date(DateTime))%>%
+  summarise(BR_Morning = max(Sensible_heat/Latent_heat))
+colnames(BR_Morning_21) <- c("DateTime", "BR_Morning")
+
+BR_Morning_22 <- Combined_df_22 %>%
+  filter(hour(ymd_hms(DateTime))>06, hour(ymd_hms(DateTime))<12)%>%
+  group_by(date(DateTime))%>%
+  summarise(BR_Morning = max(Sensible_heat/Latent_heat))
+colnames(BR_Morning_22) <- c("DateTime", "BR_Morning")
+
+BR_Morning_23 <- Combined_df_23 %>%
+  filter(hour(ymd_hms(DateTime))>06, hour(ymd_hms(DateTime))<12)%>%
+  group_by(date(DateTime))%>%
+  summarise(BR_Morning = max(Sensible_heat/Latent_heat))
+colnames(BR_Morning_23) <- c("DateTime", "BR_Morning")
+
+
+BR_Morning_tot <- rbind(BR_Morning_21, BR_Morning_22, BR_Morning_23)
+BR_Morning_sounding_dates <- filter(BR_Morning_tot,date(DateTime) %in% date(CTP_HI_low_tot_daily$DateTime))
+
+
+# Combining into the indices dataframe
+Convective_indices_soundings <- data.frame(Date = CTP_HI_low_tot_daily$DateTime,
+                                           CTP = CTP_HI_low_tot_daily$CTP,
+                                           HI_low = CTP_HI_low_tot_daily$HI_low,
+                                           CAPE = Reanalysis_indices_filtered$CAPE,
+                                           #CIN = Reanalysis_indices_filtered$CIN,
+                                           SMIOT_Morning = SMIot_Morning_sounding_dates$SM_morning_SMIoT,
+                                           SM_Morning = SM_Morning_sounding_dates$SM_morning,
+                                           NB_Evening = NB_sounding_dates$NB_Evening,
+                                           NB_Morning = NB_M_sounding_dates$NB_Morning,
+                                           BR_Morning = BR_Morning_sounding_dates$BR_Morning)
+
+
+# Check for NA's
+count_na <- colSums(sapply(Convective_indices_soundings, is.na))
+count_na
+
+Convective_indices_soundings <- Convective_indices_soundings[1:53,]%>%
+  mutate(CAPE = as.numeric(CAPE))
+
+#Computing correlations
+correlations <- round(cor(Convective_indices_soundings[,-c(1,5)]), 1)
+
+corrplot.fig <- ggcorrplot(correlations, lab = T )
+corrplot.fig
+summary(Convective_indices_soundings)
+```
+
+### Set restraints for classification and categorisation
+
+
+```{r}
+# Classification of convective events
+Convective_indices_soundings_classified <- Convective_indices_soundings %>%
+  rowwise()%>%
+  mutate( conv = {
+    case_when((CAPE > 300) ~ 1,
+              (CAPE < 300) ~ 0)
+  })
+
+# Categorisation of variables
+Convective_indices_soundings_classified["NB_Evening"][Convective_indices_soundings_classified["NB_Evening"] >= 1] <- 1
+Convective_indices_soundings_classified["NB_Evening"][Convective_indices_soundings_classified["NB_Evening"] < 1] <- 0
+Convective_indices_soundings_classified["NB_Morning"][Convective_indices_soundings_classified["NB_Morning"] >= 1] <- 1
+Convective_indices_soundings_classified["NB_Morning"][Convective_indices_soundings_classified["NB_Morning"] < 1] <- 0
+
+Convective_indices_soundings_classified <- Convective_indices_soundings_classified%>%
+  mutate(conv = as.factor(conv), NB_Evening = factor(NB_Evening, levels = c(1,0)), NB_Morning = factor(NB_Morning, levels = c(1,0)))
+
+Convective_indices_soundings_classified$SM_Morning <- cut(Convective_indices_soundings_classified$SM_Morning,
+                                          breaks = c(0,20,100),
+                                          labels = c("low", "high"))
+Convective_indices_soundings_classified$BR_Morning <- cut(Convective_indices_soundings_classified$BR_Morning,
+                                          breaks = c(-Inf,-0.5,0.5,Inf),
+                                          labels = c("high","low", "high"))
+```
+
+
+Plot the classified dataset
+```{r}
+# Plot with soil moisture 
+Convective_classified.fig <- ggplot(data = Convective_indices_soundings_classified, aes(x = CTP, y = HI_low))+
+  geom_point(aes(col = NB_Morning, shape = NB_Evening, size = SM_Morning ), stroke = 1.5,alpha = 1)+
+  geom_point(data=Convective_indices_soundings_classified %>% filter(date(Date) == "2022-08-15"), 
+           pch=21, 
+           size=4, 
+           colour="black", stroke = 2) +
+  geom_point(data=Convective_indices_soundings_classified %>% filter(date(Date) == "2023-06-26"), 
+           pch=21, 
+           size=4, 
+           colour="red", stroke = 2) +
+  geom_hline(yintercept= 15,linetype = "dashed", color='red')+
+  geom_hline(yintercept= 10,linetype = "dashed", color='gray')+
+  geom_hline(yintercept = 5,linetype = "dashed", color= 'blue')+
+  scale_shape_manual(values = c(16, 4),
+                     labels = c("1" = "Rain",
+                                "0" = "No rain"))+
+  scale_color_manual(values = c( "#0072B2", "#D55E00"),
+                     labels = c("1" = "Rain",
+                                "0" = "No rain"))+
+  scale_size_manual(values = c(2, 5))+
+  scale_x_continuous(limits = c(0, 2000), n.breaks = 10)+
+  scale_y_continuous(limits = c(-1,45), n.breaks = 9)+
+  theme(legend.text = element_text(size = 14), 
+        legend.title = element_text(size = 16), 
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 16),
+        plot.title = element_text(size = 18))+  
+  labs(color = "Morning precipitation", shape= "Evening precipitation", size = "Soil moisture")+
+  xlab("CTP [J/kg]")+ylab(expression(paste(HI[low]," [K]")))
+Convective_classified.fig
+
+#Plot with Bowen ratio
+Convective_classified_BR.fig <- ggplot(data = Convective_indices_soundings_classified, aes(x = CTP, y = HI_low))+
+  geom_point(aes(col = NB_Morning, shape = NB_Evening, size = BR_Morning ), stroke = 1.5,alpha = 1)+ geom_point(data=Convective_indices_soundings_classified %>% filter(date(Date) == "2022-08-15"), 
+           pch=21, 
+           size=4, 
+           colour="black", stroke = 2) +
+  geom_point(data=Convective_indices_soundings_classified %>% filter(date(Date) =="2023-06-26"), 
+           pch=21, 
+           size=4, 
+           colour="red", stroke = 2) +
+  geom_hline(yintercept= 15,linetype = "dashed", color='red')+
+  geom_hline(yintercept= 10,linetype = "dashed", color='gray')+
+  geom_hline(yintercept = 5,linetype = "dashed", color= 'blue')+
+  scale_shape_manual(values = c(16, 4),
+                     labels = c("1" = "Rain",
+                                "0" = "No rain"))+
+  scale_color_manual(values = c( "#0072B2", "#D55E00"),
+                     labels = c("1" = "Rain",
+                                "0" = "No rain"))+
+  scale_size_manual(values = c(5, 2))+
+  scale_x_continuous(limits = c(0, 2000), n.breaks = 10)+
+  scale_y_continuous(limits = c(-1,45), n.breaks = 9)+
+  theme(legend.text = element_text(size = 14), 
+        legend.title = element_text(size = 16), 
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 16),
+        plot.title = element_text(size = 18))+  
+  labs(color = "Morning precipitation", shape= "Evening precipitation", size = "Bowen ratio")+
+  xlab("CTP [J/kg]")+ylab(expression(paste(HI[low]," [K]")))
+Convective_classified_BR.fig
+
+# Plot with convective classification
+Convective_SM.fig <- ggplot(data = Convective_indices_soundings_classified, aes(x = CTP, y = HI_low))+
+  geom_point(aes(col = NB_Morning, shape = NB_Evening, size = conv ), stroke = 1.5)+
+  geom_hline(yintercept= 15,linetype = "dashed", color='red')+
+  geom_hline(yintercept= 10,linetype = "dashed", color='gray')+
+  geom_hline(yintercept = 5,linetype = "dashed", color= 'blue')+
+  geom_point(data=Convective_indices_soundings_classified %>% filter(date(Date) == "2022-08-15"), 
+           pch=21, 
+           size=4, 
+           colour="black", stroke = 2) +
+  geom_point(data=Convective_indices_soundings_classified %>% filter(date(Date) =="2023-06-26"), 
+           pch=21, 
+           size=4, 
+           colour="red", stroke = 2) +
+  scale_shape_manual(values = c(16, 4),
+                     labels = c("1" = "Rain",
+                                "0" = "No rain"))+
+  scale_color_manual(values = c("#0072B2", "#D55E00"),
+                     labels = c("1" = "Rain",
+                                "0" = "No Rain"))+
+  scale_size_manual(values = c(5, 2),
+                    labels = c("1" = "Convection",
+                               "0" = "No convection"))+
+  scale_x_continuous(limits = c(0, 2000), n.breaks = 10)+
+  scale_y_continuous(limits = c(-1,45), n.breaks = 9)+
+  theme(legend.text = element_text(size = 14), 
+        legend.title = element_text(size = 16), 
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 16),
+        plot.title = element_text(size = 18))+  
+  labs(color = "Morning precipitation", shape= "Evening precipitation", size = "Convection")+
+  xlab("CTP [J/kg]")+ylab(expression(paste(HI[low]," [K]")))
+Convective_SM.fig
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
